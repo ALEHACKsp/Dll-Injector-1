@@ -53,18 +53,24 @@ DWORD WINAPI StartRoutine(LPVOID lpParam)
 
     if (!AllocConsole())
     {
-        HandleError("Failed to attach console");
+        HandleError("Failed to attach console!");
         FreeLibraryAndExitThread(static_cast<HMODULE>(lpParam), 0);
     }
     freopen_s(reinterpret_cast<FILE**>(stdout), "CONOUT$", "w", stdout);
+    freopen_s(reinterpret_cast<FILE**>(stderr), "CONOUT$", "w", stderr);
     std::cout << "Console initialized!" << std::endl;
 
     while (!(GetAsyncKeyState(VK_INSERT) & 0x1))
     {
-        //std::cout << "Loop" << std::endl;
+        std::cout << "Loop" << std::endl;
         Sleep(100);
     }
 
-    FreeConsole();
+    fclose(stdout);
+    fclose(stderr);
+    if (!FreeConsole())
+    {
+        HandleError("Failed to free console!");
+    }
     FreeLibraryAndExitThread(static_cast<HMODULE>(lpParam), 0);
 }
