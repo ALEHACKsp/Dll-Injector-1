@@ -1,137 +1,99 @@
-#include <Windows.h>
-#include <tlhelp32.h>
-#include <stdio.h>
+﻿#include <Windows.h>
+#include <TlHelp32.h>
 #include <iostream>
-#include <string>
-#include "XorCompileTime.h"
 
-DWORD findPidByName(const char* pname)
+DWORD GetTargetProcessIdFromProcname(const std::string& procName)
 {
-    HANDLE h;
-    PROCESSENTRY32 procSnapshot;
-    h = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    procSnapshot.dwSize = sizeof(PROCESSENTRY32);
+    PROCESSENTRY32 pe;
+    HANDLE thSnapshot;
+    BOOL retval, ProcFound = false;
 
-    do
+    thSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+
+    if (thSnapshot == INVALID_HANDLE_VALUE)
     {
-        if (!_stricmp(procSnapshot.szExeFile, pname))
-        {
-            DWORD pid = procSnapshot.th32ProcessID;
-            CloseHandle(h);
-#ifdef _DEBUG
-            printf(XorStr("[+] found: %ld\n"), pid);
-#endif
-            return pid;
-        }
-    } while (Process32Next(h, &procSnapshot));
+        MessageBox(NULL, "Error: unable to create toolhelp snapshot", "Loader", NULL);
+        return false;
+    }
 
-    CloseHandle(h);
+    pe.dwSize = sizeof(PROCESSENTRY32);
+
+    retval = Process32First(thSnapshot, &pe);
+
+    while (retval)
+    {
+        if (procName == pe.szExeFile)
+        {
+            ProcFound = true;
+            break;
+        }
+
+        retval = Process32Next(thSnapshot, &pe);
+        pe.dwSize = sizeof(PROCESSENTRY32);
+    }
+
+    return pe.th32ProcessID;
+}
+
+BOOL InjectDLL(const DWORD& processId, const std::string& dllName);
+
+/**
+ * If it is a 64-bit process, compile and run in 64bit:
+ * https://stackoverflow.com/questions/9456228/createremotethread-returning-error-access-denied-windows-7-dll-injection
+ ***/
+int main()
+{
+    const std::string dllName{ "D:\\repos\\Dll Injector\\x64\\Debug\\DummyDll.dll" };
+    const DWORD processId{ GetTargetProcessIdFromProcname("notepad.exe") };
+
+    InjectDLL(processId, dllName);
+
     return 0;
 }
 
-typedef DWORD(WINAPI* pRtlCreateUserThread)(
-    IN HANDLE 					ProcessHandle,
-    IN PSECURITY_DESCRIPTOR 	SecurityDescriptor,
-    IN BOOL 					CreateSuspended,
-    IN ULONG					StackZeroBits,
-    IN OUT PULONG				StackReserved,
-    IN OUT PULONG				StackCommit,
-    IN LPVOID					StartAddress,
-    IN LPVOID					StartParameter,
-    OUT HANDLE 					ThreadHandle,
-    OUT LPVOID					ClientID
-    );
-
-DWORD RtlCreateUserThread(LPCSTR pszLibFile, DWORD dwProcessId)
+BOOL InjectDLL(const DWORD& processId, const std::string& dllName)
 {
-    pRtlCreateUserThread RtlCreateUserThread = NULL;
-    HANDLE  hRemoteThread = NULL;
+    if (!processId)
+        return false;
 
-    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, dwProcessId);
-    if (hProcess == NULL)
+    const HANDLE hProc = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, processId);
+
+    if (!hProc)
     {
-        printf(XorStr("[-] Error: Could not open process for PID (%d).\n"), dwProcessId);
-        exit(1);
+        std::cout << "OpenProcess() failed: " << GetLastError() << std::endl;
+        return false;
     }
 
-    LPVOID LoadLibraryAddress = (LPVOID)GetProcAddress(GetModuleHandle(XorStr("kernel32.dll")), XorStr("LoadLibraryA"));
-    if (LoadLibraryAddress == NULL)
+    const LPVOID loadLibrary = static_cast<LPVOID>(GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA"));
+    if (!loadLibrary)
     {
-        printf(XorStr("[-] Error: Could not find LoadLibraryA function inside kernel32.dll library.\n"));
-        exit(1);
+        std::cout << "GetProcAddress() failed: " << GetLastError() << std::endl;
+        return false;
     }
 
-    RtlCreateUserThread = (pRtlCreateUserThread)GetProcAddress(GetModuleHandle(XorStr("ntdll.dll")), XorStr("RtlCreateUserThread"));
-    if (RtlCreateUserThread == NULL)
+    const LPVOID remoteStringAllocatedMem = static_cast<LPVOID>(VirtualAllocEx(hProc, NULL, dllName.length(), MEM_RESERVE | MEM_COMMIT,
+        PAGE_READWRITE));
+    if (!remoteStringAllocatedMem)
     {
-        //wprintf(L"[-] Error: Could not find RtlCreateUserThread function inside ntdll.dll library.\n");
-        exit(1);
+        std::cout << "VirtualAllocEx() failed: " << GetLastError() << std::endl;
+        return false;
     }
 
-#ifdef _DEBUG
-    printf(XorStr("[+] Found at 0x%08x\n"), (UINT)RtlCreateUserThread);
-    printf(XorStr("[+] Found at 0x%08x\n"), (UINT)LoadLibraryAddress);
-#endif
-
-    DWORD dwSize = (strlen(pszLibFile) + 1) * sizeof(char);
-
-    LPVOID lpBaseAddress = VirtualAllocEx(hProcess, NULL, dwSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (lpBaseAddress == NULL)
+    if (!WriteProcessMemory(hProc, static_cast<LPVOID>(remoteStringAllocatedMem), dllName.c_str(), dllName.length(), NULL))
     {
-        printf(XorStr("[-] Error: Could not allocate memory inside PID (%d).\n"), dwProcessId);
-        exit(1);
+        std::cout << "WriteProcessMemory() failed: " << GetLastError() << std::endl;
+        return false;
     }
 
-    BOOL bStatus = WriteProcessMemory(hProcess, lpBaseAddress, pszLibFile, dwSize, NULL);
-    if (bStatus == 0)
+    HANDLE hRemoteThread = CreateRemoteThread(hProc, NULL, NULL, static_cast<LPTHREAD_START_ROUTINE>(loadLibrary), static_cast<LPVOID>(remoteStringAllocatedMem), NULL, NULL);
+    if (!hRemoteThread)
     {
-        printf(XorStr("[-] Error: Could not write any bytes into the PID (%d) address space.\n"), dwProcessId);
-        return(1);
+        std::cout << "CreateRemoteThread() failed: " << GetLastError() << std::endl;
+        return false;
     }
 
-    bStatus = (BOOL)RtlCreateUserThread(
-        hProcess,
-        NULL,
-        0,
-        0,
-        0,
-        0,
-        LoadLibraryAddress,
-        lpBaseAddress,
-        &hRemoteThread,
-        NULL);
-    if (bStatus < 0)
-    {
-        printf(XorStr("[-] Error: RtlCreateUserThread failed\n"));
-        return(1);
-    }
-    else
-    {
-        printf(XorStr("[+] Remote thread has been created successfully ...\n"));
-        WaitForSingleObject(hRemoteThread, INFINITE);
+    CloseHandle(hProc);
+    CloseHandle(hRemoteThread);
 
-        CloseHandle(hProcess);
-        VirtualFreeEx(hProcess, lpBaseAddress, dwSize, MEM_RELEASE);
-        return(0);
-    }
-
-    return(0);
-}
-
-std::string ExePath()
-{
-    char buffer[MAX_PATH];
-    GetModuleFileName(NULL, buffer, MAX_PATH);
-    std::string::size_type pos = std::string(buffer).find_last_of("\\/");
-    return std::string(buffer).substr(0, pos);
-}
-
-int main()
-{
-    const char* name = XorStr("Process.exe");
-
-    DWORD pId = findPidByName(name);
-    LPCSTR location = XorStr("C:\\library.dll");
-
-    RtlCreateUserThread(location, pId);
+    return true;
 }
