@@ -2,7 +2,74 @@
 #include <TlHelp32.h>
 #include <iostream>
 
-DWORD GetTargetProcessIdFromProcname(const std::string& procName)
+DWORD GetTargetProcessIdFromProcessName(const std::string& procName);
+BOOL InjectDllLoadLibrary(const DWORD& processId, const std::string& dllName);
+
+using std::cout;
+using std::endl;
+
+/**
+ * If it is a 64-bit process, compile and run in 64bit:
+ * https://stackoverflow.com/questions/9456228/createremotethread-returning-error-access-denied-windows-7-dll-injection
+ ***/
+int main()
+{
+    const std::string dllFullPath{ "D:\\repos\\Dll Injector\\x64\\Debug\\DummyDll.dll" };
+    const DWORD processId{ GetTargetProcessIdFromProcessName("notepad.exe") };
+
+    (void)InjectDllLoadLibrary(processId, dllFullPath);
+
+    return 0;
+}
+
+BOOL InjectDllLoadLibrary(const DWORD& processId, const std::string& dllName)
+{
+    if (!processId)
+        return false;
+
+    const HANDLE hProc = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, processId);
+
+    if (!hProc)
+    {
+        cout << "OpenProcess() failed: " << GetLastError() << endl;
+        return false;
+    }
+
+    const LPVOID loadLibrary{ static_cast<LPVOID>(GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA")) };
+    if (!loadLibrary)
+    {
+        cout << "GetProcAddress() failed: " << GetLastError() << endl;
+        return false;
+    }
+
+    const LPVOID remoteStringAllocatedMem{ static_cast<LPVOID>(VirtualAllocEx(hProc, NULL, dllName.length(), MEM_RESERVE | MEM_COMMIT,
+        PAGE_READWRITE)) };
+    if (!remoteStringAllocatedMem)
+    {
+        cout << "VirtualAllocEx() failed: " << GetLastError() << endl;
+        return false;
+    }
+
+    if (!WriteProcessMemory(hProc, static_cast<LPVOID>(remoteStringAllocatedMem), dllName.c_str(), dllName.length(), NULL))
+    {
+        cout << "WriteProcessMemory() failed: " << GetLastError() << endl;
+        return false;
+    }
+
+    const HANDLE hRemoteThread{ CreateRemoteThread(hProc, NULL, NULL, static_cast<LPTHREAD_START_ROUTINE>(loadLibrary), static_cast<LPVOID>(remoteStringAllocatedMem), NULL, NULL) };
+    if (!hRemoteThread)
+    {
+        cout << "CreateRemoteThread() failed: " << GetLastError() << endl;
+        return false;
+    }
+
+    CloseHandle(hProc);
+    CloseHandle(hRemoteThread);
+
+    return true;
+}
+
+DWORD GetTargetProcessIdFromProcessName(const std::string& procName)
 {
     PROCESSENTRY32 pe;
     HANDLE thSnapshot;
@@ -33,67 +100,4 @@ DWORD GetTargetProcessIdFromProcname(const std::string& procName)
     }
 
     return pe.th32ProcessID;
-}
-
-BOOL InjectDLL(const DWORD& processId, const std::string& dllName);
-
-/**
- * If it is a 64-bit process, compile and run in 64bit:
- * https://stackoverflow.com/questions/9456228/createremotethread-returning-error-access-denied-windows-7-dll-injection
- ***/
-int main()
-{
-    const std::string dllName{ "D:\\repos\\Dll Injector\\x64\\Debug\\DummyDll.dll" };
-    const DWORD processId{ GetTargetProcessIdFromProcname("notepad.exe") };
-
-    InjectDLL(processId, dllName);
-
-    return 0;
-}
-
-BOOL InjectDLL(const DWORD& processId, const std::string& dllName)
-{
-    if (!processId)
-        return false;
-
-    const HANDLE hProc = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, processId);
-
-    if (!hProc)
-    {
-        std::cout << "OpenProcess() failed: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    const LPVOID loadLibrary = static_cast<LPVOID>(GetProcAddress(GetModuleHandle("kernel32.dll"), "LoadLibraryA"));
-    if (!loadLibrary)
-    {
-        std::cout << "GetProcAddress() failed: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    const LPVOID remoteStringAllocatedMem = static_cast<LPVOID>(VirtualAllocEx(hProc, NULL, dllName.length(), MEM_RESERVE | MEM_COMMIT,
-        PAGE_READWRITE));
-    if (!remoteStringAllocatedMem)
-    {
-        std::cout << "VirtualAllocEx() failed: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    if (!WriteProcessMemory(hProc, static_cast<LPVOID>(remoteStringAllocatedMem), dllName.c_str(), dllName.length(), NULL))
-    {
-        std::cout << "WriteProcessMemory() failed: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    HANDLE hRemoteThread = CreateRemoteThread(hProc, NULL, NULL, static_cast<LPTHREAD_START_ROUTINE>(loadLibrary), static_cast<LPVOID>(remoteStringAllocatedMem), NULL, NULL);
-    if (!hRemoteThread)
-    {
-        std::cout << "CreateRemoteThread() failed: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    CloseHandle(hProc);
-    CloseHandle(hRemoteThread);
-
-    return true;
 }

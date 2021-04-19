@@ -2,6 +2,36 @@
 #include <iostream>
 #include <sstream>
 
+void HandleError(const std::string& msg);
+DWORD WINAPI StartRoutine(LPVOID lpParam);
+
+BOOL WINAPI DllMain(
+    HINSTANCE hinstDLL,  // handle to DLL module
+    DWORD fdwReason,     // reason for calling function
+    LPVOID lpReserved)  // reserved
+{
+    switch (fdwReason)
+    {
+    case DLL_PROCESS_ATTACH:
+        (void)MessageBox(NULL, "Injected", "Success", MB_OK);
+        CreateThread(NULL, NULL, StartRoutine, hinstDLL, NULL, NULL);
+        break;
+
+    case DLL_THREAD_ATTACH:
+        //(void)MessageBox(NULL, "DLL_THREAD_ATTACH", "Success", MB_OK);
+        break;
+
+    case DLL_THREAD_DETACH:
+        //(void)MessageBox(NULL, "DLL_THREAD_DETACH", "Success", MB_OK);
+        break;
+
+    case DLL_PROCESS_DETACH:
+        //(void)MessageBox(NULL, "DLL_PROCESS_DETACH", "Success", MB_OK);
+        break;
+    }
+    return TRUE;
+}
+
 void HandleError(const std::string& msg)
 {
     std::ostringstream s;
@@ -37,31 +67,4 @@ DWORD WINAPI StartRoutine(LPVOID lpParam)
 
     FreeConsole();
     FreeLibraryAndExitThread(static_cast<HMODULE>(lpParam), 0);
-}
-
-BOOL WINAPI DllMain(
-    HINSTANCE hinstDLL,  // handle to DLL module
-    DWORD fdwReason,     // reason for calling function
-    LPVOID lpReserved)  // reserved
-{
-    switch (fdwReason)
-    {
-    case DLL_PROCESS_ATTACH:
-        (void)MessageBox(NULL, "Injected", "Success", MB_OK);
-        CreateThread(NULL, NULL, StartRoutine, hinstDLL, NULL, NULL);
-        break;
-
-    case DLL_THREAD_ATTACH:
-        //(void)MessageBox(NULL, "DLL_THREAD_ATTACH", "Success", MB_OK);
-        break;
-
-    case DLL_THREAD_DETACH:
-        //(void)MessageBox(NULL, "DLL_THREAD_DETACH", "Success", MB_OK);
-        break;
-
-    case DLL_PROCESS_DETACH:
-        //(void)MessageBox(NULL, "DLL_PROCESS_DETACH", "Success", MB_OK);
-        break;
-    }
-    return TRUE;
 }
